@@ -239,6 +239,10 @@ local function Decode( aString )
             Merge( aNode )
 
             aStack[ #aStack ] = nil
+
+            if #aStack == 1 then
+               break
+            end
         end
 
         anIndex = anEnd + 1
