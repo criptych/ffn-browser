@@ -64,6 +64,10 @@ function FFN.storyid(uri)
    return tonumber(uri:match('/s/(%d+)/'))
 end
 
+function FFN.nchapters(summary)
+   return tonumber(summary:match('Chapters: (%d+)'))
+end
+
 --[[ FFN metadata ]]
 
 FFN.content = {[1]="New Stories",[2]="New Chapters"}

@@ -1,10 +1,3 @@
-local base = _G
-
-module 'dump'
-
-local dump = base.setmetatable(_M, {})
-local meta = base.getmetatable(dump)
-
 local _keywords = {
    ['and'] = true,
    ['break'] = true,
@@ -29,24 +22,23 @@ local _keywords = {
    ['while'] = true,
 }
 
-local _dumpfuncs = {
+local _dumpfuncs
+_dumpfuncs = {
    ['table'] = function (tbl)
       local s = '{'
-      for key, val in base.pairs(tbl) do
-         local k, v = dump(key), dump(val)
-         if v ~= 'nil' then
-            if base.type(key) == 'string' and key:match('^[%a_][%w_]*$') and not _keywords[key] then
-               k = key
-            elseif k ~= 'nil' then
-               k = '[' .. k .. ']'
+      for k, v in pairs(tbl) do
+         local key = _dumpfuncs[type(k)]
+         local val = _dumpfuncs[type(v)]
+
+         if key and val then
+            if type(k) == 'string' and k:find('^[_%a][_%w]*$') and not _keywords[k] then
+               key = k
             else
-               k = nil
+               key = '[' .. key(k) .. ']'
             end
-            if k then
-               s = s .. k .. '=' .. v
-               if base.next(tbl, key) then
-                  s = s .. ','
-               end
+            s = s .. key .. '=' .. val(v)
+            if next(tbl, k) then
+               s = s .. ','
             end
          end
       end
@@ -56,26 +48,17 @@ local _dumpfuncs = {
       return ('%q'):format(str)
    end,
    ['number'] = function (num)
-      return base.tostring(num)
+      return tostring(num)
    end,
    ['boolean'] = function (bool)
-      return base.tostring(bool)
+      return tostring(bool)
    end,
    ['function'] = function (func)
-      return ('loadstring(%q)'):format(base.string.dump(func))
-   end,
-   ['nil'] = function (_nil)
-      return 'nil'
-   end,
-   ['userdata'] = function (_nil)
-      return 'nil'
-   end,
-   ['thread'] = function (_nil)
-      return 'nil'
+      return ('loadstring(%q)'):format(string.dump(func))
    end,
 }
 
 -- returns a string that can be read with loadstring
-function meta:__call(var)
-   return _dumpfuncs[base.type(var)](var)
+function dump(var)
+   return _dumpfuncs[type(var)](var)
 end

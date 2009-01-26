@@ -1,79 +1,12 @@
 require "class"
-require "FFN"
-require "XML"
-require "HTML"
---require "HTTP"
+require "extend"
+require "filepath"
 require "dump"
 
---------------------------------------------------------------------------------
-
-local min   = pge.math.min   or math.min
-local max   = pge.math.max   or math.max
-local floor = pge.math.floor or math.floor
-
-function clamp (val, lo, hi)
-   return max(lo, min(hi, val or lo))
-end
-
-function wrap (val, lo, hi)
-   if lo > hi then
-      lo, hi = hi, lo
-   elseif lo == hi then
-      return lo
-   end
-
-   return lo + (val - lo) % (hi - lo)
-end
-
-local smt = getmetatable('')
-function smt:__mod(rhs)
-   if type(rhs) == 'table' then
-      return self:format(unpack(rhs))
-   else
-      return self:format(rhs)
-   end
-end
-function smt:__mul(rhs)
-   return self:rep(tonumbe(rhs))
-end
-
-function table.find(tbl, item)
-   for i, v in ipairs(tbl) do
-      if v == item then return i end
-   end
-   return 0
-end
-
-function table.copy(tbl, copy)
-   if copy == nil then copy = {} end
-   for k, v in pairs(tbl) do
-      copy[k] = v
-   end
-   return copy
-end
-
-local _tostring = tostring
-function tostring(val)
-   if type(val) == 'table' then
-      local s = '{'
-      for k, v in pairs(val) do
-         s = s .. '[%s] = %s, ' % {tostring(k), tostring(v)}
-      end
-      return s .. '}'
-   else
-      return _tostring(val)
-   end
-end
-
-function subset (tbl, first, last)
-   local i, j = max(1, first), min(#tbl, last)
-   return function()
-      if i <= j then
-         i = i + 1
-         return i - 1, tbl[i - 1]
-      end
-   end
-end
+require "XML"
+require "FFN"
+--require "HTTP"
+require "HTML"
 
 --------------------------------------------------------------------------------
 
@@ -95,44 +28,6 @@ function ap_disconnect()
 end
 
 --------------------------------------------------------------------------------
-
-function mkdirs(path)
-   local p = ''
-   for dir in path:gmatch('/?[^/]+/') do
-      p = p .. dir
-      if not (pge.dir.exists(p) or pge.dir.mkdir(p)) then
-         return false
-      end
-   end
-   return true
-end
-
-function basename(path)
-   return path:sub((path:find('[/\\][^/\\]*$') + 1) or 1)
-end
-
-function dirname(path)
-   return path:sub(1, path:find('[/\\][^/\\]*$') or 0)
-end
-
-function readfile(filename)
-   local fh = pge.file.open(filename, PGE_FILE_RDONLY)
-   if fh then
-      local str = fh:read(fh:size())
-      fh:close()
-      return str
-   end
-end
-
-function writefile(filename, content)
-   local fh = pge.file.open(
-      filename, PGE_FILE_WRONLY+PGE_FILE_CREATE+PGE_FILE_TRUNC)
-   if fh then
-      fh:write(content)
-      fh:close()
-      return true
-   end
-end
 
 function needfile(file, overwrite)
    return overwrite or not pge.file.exists(file)
@@ -188,78 +83,70 @@ end
 
 --------------------------------------------------------------------------------
 
-function wrap_lines(text, maxwidth)
-   maxwidth = maxwidth or 480
-   local lines = {}
-   local first, last, width = 1, 0, 0
-   for i = 1, text:len() do
-      local c = text:sub(i, i)
-      if c == " " or c == "\n" then
-         last = i
-      end
-      width = width + font:measure(c)
-      if c == "\n" or (c ~= " " and width >= maxwidth) then
-         table.insert(lines, text:sub(first, last))
-         first = last + 1
-         width = font:measure(text:sub(first, i))
-      end
-   end
-   if first <= text:len() then
-      table.insert(lines, text:sub(first))
-   end
-   return lines
-end
-
---------------------------------------------------------------------------------
-
 Database = class()
 
+Database.file = {}
+
 function Database:init(file)
-   self._data = {}
-   self._file = ''
-
-   self._meta = {}
-   local _meta = self._meta
-   function _meta:__index(key)
-      self[key] = {}
-      setmetatable(self[key], _meta)
-      return self[key]
-   end
-
-   self:load(file or self._file)
+   self:load(file)
 end
 
 function Database:load(file)
-   self._file = file or self._file
-   self._data = loadfile(self._file) or {}
-   setmetatable(self._data, self._meta)
+   file = file or Database.file[self]
+   local t = loadfile(file)
+   for k, v in pairs(t and t() or {}) do
+      self[k] = v
+   end
+   Database.file[self] = file
 end
 
-function Database:group(grp)
-   if self._data[grp] == nil then self._data[grp] = {} end
-   return self._data[grp]
+function Database:save()
+   return writefile(Database.file[self], 'return ' .. dump(self))
 end
 
-function Database:set(grp, key, val)
-   if val then self:group(grp)[key] = val end
+function Database:get(key, def)
+   if self[key] == nil then
+      self[key] = def
+   end
+   return self[key]
 end
 
-function Database:unset(grp, key)
-   self:group(grp)[key] = nil
-end
-
-function Database:get(grp, key, def)
-   local g = self:group(grp)
-   if not g[key] then g[key] = def end
-   return g[key]
-end
-
-function Database:save(file)
-   self._file = file or self._file
-   writefile(self._file, 'return '..dump(self._data))
+function Database:set(key, val)
+   self[key] = val
 end
 
 --------------------------------------------------------------------------------
+
+function parse_feed_date(date)
+   local d = {date:match('^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d)%:(%d%d)%:(%d%d%.?%d-)(.-)$')}
+   if d[7] ~= 'Z' then
+      local m = d[7]:match('([%-%+])(%d%d):(%d%d)')
+      if m then
+         local sign = (m[1] == '-' and -1 or 1)
+         d[5] = d[5] + m[2] * sign
+         d[6] = d[6] + m[3] * sign
+      end
+   end
+   return os.time({ year = d[1], month  = d[2], day    = d[3],
+                    hour = d[4], minute = d[5], second = d[6] })
+end
+
+Person = class()
+
+function Person:init(name, uri, email)
+   self.name = name
+   self.uri = uri
+   self.email = email
+end
+
+Entry = class()
+
+function Entry:init(id, title, updated)
+   self.id = id
+   self.title = title
+   self.updated = updated
+   self.link = {}
+end
 
 Feed = class()
 
@@ -270,33 +157,57 @@ Feed = "/atom/{etc}"
 <category term="Fiction Rated: {rating}"/>
 ]]
 
-function Feed:init(file, url)
+function Feed:init(file, url, overwrite)
    self.file = file
    self.url = url
-   self:load()
+   self.entry = {}
+   self.link = {}
+
+   self:load(overwrite)
 end
 
 function Feed:load(overwrite)
    offline = false
    local xml = getfile(self.file, self.url, overwrite)
+
    if xml then
-      local feed = XML(xml)
-      for k, v in pairs(feed.feed) do
-         self[k] = v
+      local feed = XML(xml).feed
+
+      self.id = feed.id['$']
+      self.title = feed.title['$']
+
+      local links = (#feed.link == 0) and { feed.link } or feed.link
+      for i, link in ipairs(links) do
+         self.link[link['@rel']] = link['@href']
       end
 
-      if #self.entry < 1 then
-         self.entry = { self.entry }
+      self.url = self.link.self or self.url
+
+      local entries = (#feed.entry == 0) and { feed.entry } or feed.entry
+      for i, entry in ipairs(entries) do
+         local ev = Entry(entry.id['$'], entry.title['$'], entry.updated['$'])
+
+         table.insert(self.entry, ev)
+
+         local name, uri, email
+         name  = entry.author.name  and entry.author.name ['$']
+         uri   = entry.author.uri   and entry.author.uri  ['$']
+         email = entry.author.email and entry.author.email['$']
+
+         ev.author = Person(name, uri, email)
+
+         local links = (#entry.link == 0) and { entry.link } or entry.link
+         for i, link in ipairs(links) do
+            ev.link[link['@rel']] = link['@href']
+         end
+
+         ev.summary = entry.summary['$']
       end
 
-      db.feed[self.file] = { title = self.title['$'], url = self.url }
-      for i, entry in ipairs(self.entry) do
-         local userid = FFN.userid(entry.author.uri['$'])
-         local storyid = FFN.storyid(entry.link['@href'])
-         local nchapters = tonumber(entry.summary['$']:match('Chapters: (%d+)'))
-         db.author[userid] = { name = entry.author.name['$'] }
-         db.story[storyid] = { title = entry.title['$'], author = userid, nchapters = nchapters }
-      end
+      db.feed[self.file] = {
+         title = self.title:gsub('^FanFiction%.Net %- ', ''),
+         url = self.url,
+         }
    end
 end
 
@@ -345,9 +256,9 @@ Screen = class()
 
 function Screen:init(backcolor)
    self.backcolor = backcolor or pge.gfx.createcolor(0, 0, 0)
+   self.grayed = pge.gfx.createcolor(0, 0, 0, 128)
    self.views = {}
    self.timer = pge.timer.create()
-   self.grayed = pge.gfx.createcolor(0, 0, 0, 192)
 end
 
 function Screen:view()
@@ -366,42 +277,39 @@ function Screen:set_view(view)
    self.views[#self.views] = view
 end
 
-function Screen:doFrame(dialog)
+function Screen:interact(view, dialog)
    pge.controls.update()
-   if pge.controls.pressed(PGE_CTRL_SELECT) then
-      db:save()
-   --elseif pge.controls.pressed(PGE_CTRL_START) then
-   --   screenshot()
-   end
-
-   local view = self:view()
-
    if not dialog then view:interact() end
+end
 
+function Screen:update(view)
    self.timer:update()
    local delta = self.timer:getdelta()
    view:update(delta)
+end
 
-   if not view.running then self:pop_view() end
-
+function Screen:draw(view, dialog)
    pge.gfx.startdrawing()
    pge.gfx.clearscreen(self.backcolor)
-
    view:draw()
-
-   if dialog then
-      pge.gfx.drawrect(0, 0, 480, 272, self.grayed)
-      pge.gfx.enddrawing()
-      dialog:update()
-   else
-      pge.gfx.enddrawing()
-   end
-
+   if dialog then pge.gfx.drawrect(0, 0, 480, 272, self.grayed) end
+   pge.gfx.enddrawing()
+   if dialog then dialog:update() end
    pge.gfx.swapbuffers()
 end
 
+function Screen:doFrame(dialog)
+   local view = self:view()
+   if view then
+      self:interact(view, dialog)
+      self:update(view)
+      self:draw(view, dialog)
+      return true
+   end
+end
+
 function Screen:showDialog(dialog)
-   while dialog.running do
+   while dialog.running and self:running() do
       self:doFrame(dialog)
    end
    return unpack(dialog.result)
@@ -436,6 +344,7 @@ function Widget:update(delta)
 end
 
 function Widget:draw()
+   pge.gfx.drawrect(self.x, self.y, self.w, self.h, colors[theme().backcolor])
 end
 
 --------------------------------------------------------------------------------
@@ -449,19 +358,18 @@ function ProgressBar:init(x, y, w, h, lo, hi, val)
    self.val = val or self.lo
 end
 
-function ProgressBar:update(delta)
-   self.pw = (self.w - 2) * (self.val - self.lo) / max(1, self.hi - self.lo)
-end
-
 function ProgressBar:draw()
    local y, h = self.y, self.h
    if h > font:height() + 1 then
       h = font:height() + 1
       y = self.y + (self.h - h) / 2
    end
+
+   local pw = (self.w - 2) * (self.val - self.lo) / max(1, self.hi - self.lo)
+
    pge.gfx.drawrect(self.x, self.y, self.w, self.h, colors[theme().backcolor])
    pge.gfx.drawrect(self.x, y, self.w, h, colors[theme().forecolor])
-   pge.gfx.drawrect(self.x + 1, y + 1, self.pw, h - 2, colors[theme().highlight])
+   pge.gfx.drawrect(self.x + 1, y + 1, pw, h - 2, colors[theme().highlight])
 end
 
 --------------------------------------------------------------------------------
@@ -476,30 +384,152 @@ function ScrollBar:init(x, y, w, h, lo, hi, val, step)
    self.step = step or 1
 end
 
-function ScrollBar:update(delta)
-   Widget.update(self, delta)
+function ScrollBar:draw()
+   self.val = clamp(self.val, self.lo, self.hi)
 
    local h = self.h - 2
    local range = max(1, self.hi - self.lo + 1)
-   self.val = clamp(self.val, self.lo, self.hi)
-   self.ty = h * (self.val - self.lo) / range
-   self.th = clamp(h * self.step / range, 1, h)
-end
+   local ty = h * (self.val - self.lo) / range
+   local th = clamp(h * self.step / range, 1, h)
 
-function ScrollBar:draw()
    pge.gfx.drawrect(self.x, self.y, self.w, self.h, colors[theme().forecolor])
-   pge.gfx.drawrect(self.x + 1, self.y + self.ty + 1, self.w - 2, self.th, colors[theme().highlight])
+   pge.gfx.drawrect(self.x + 1, self.y + ty + 1, self.w - 2, th, colors[theme().highlight])
 end
 
 --------------------------------------------------------------------------------
+
+function wrap_lines(text, maxwidth)
+   maxwidth = maxwidth or 480
+   local f = font
+
+   local lines = {}
+   local line = {}
+   local first, last, width = 1, 0, 0
+   local escape = false
+   local n = 1
+
+   local bold, italic, uline = false, false, false
+
+   function setfont(b, i)
+      if b then
+         if i then
+            f = fontbi
+         else
+            f = fontb
+         end
+      else
+         if i then
+            f = fonti
+         else
+            f = font
+         end
+      end
+
+      bold = b
+      italic = i
+   end
+
+   function putline()
+      table.insert(lines, line)
+      line = {}
+   end
+
+   function putspan(t)
+      if #t > 0 then
+         local w = f:measure(t)
+         table.insert(line, { text = t, font = f, width = w, uline = uline })
+      end
+   end
+
+   function putchar(c)
+      width = width + f:measure(c)
+      if c == "\n" or (c ~= " " and width >= maxwidth) then
+         putspan(text:sub(first, last))
+         putline()
+         first = last + 1
+         width = f:measure(text:sub(first, n))
+      end
+   end
+
+   while n <= text:len() do
+      local c = text:sub(n, n)
+      if c == " " or c == "\n" then
+         last = n
+      end
+      if escape then
+         if c == '\\' then
+            putchar('\\')
+         elseif c == 'b' then
+            putspan(text:sub(first, n - 2))
+            first = n + 1
+            last = first
+            setfont(not bold, italic)
+         elseif c == 'i' then
+            putspan(text:sub(first, n - 2))
+            first = n + 1
+            last = first
+            setfont(bold, not italic)
+         elseif c == 'u' then
+            putspan(text:sub(first, n - 2))
+            first = n + 1
+            last = first
+            uline = not uline
+         else
+            putchar('\\')
+            putchar(c)
+         end
+
+         escape = false
+      else
+         if c == '\\' then
+            escape = true
+         else
+            putchar(c)
+         end
+      end
+      n = n + 1
+   end
+   if first <= text:len() then
+      putspan(text:sub(first))
+   end
+   if #line > 0 then
+      putline()
+   end
+   return lines
+end
+
+local _tagrep = {
+   ['p'] = '\n\n    ',
+   ['/p'] = '',
+   ['br'] = '\n',
+   ['hr'] = '\n-----\n',
+   ['a'] = '',
+   ['/a'] = '',
+
+   ['b'] = '\\b',
+   ['/b'] = '\\b',
+   ['i'] = '\\i',
+   ['/i'] = '\\i',
+   ['u'] = '\\u',
+   ['/u'] = '\\u',
+}
+
+function format_tags(tag)
+   if tag:match('^<[%!%?]') then
+      return ''
+   end
+   return _tagrep[tag:match("<(/?%a%w*)%W"):lower()]
+end
 
 TextBox = class(Widget)
 
 function TextBox:init(x, y, w, h, text)
    Widget.init(self, x, y, w, h)
    self.first_line = 1
-   self.max_lines = floor((self.h - 2) / (font:height() + 1))
 
+   self.leading = 3
+
+   self.max_lines = floor((self.h - 2) / (font:height() + self.leading))
    self.scroll = ScrollBar(self.x + self.w - 8, self.y, 8, self.h, 1, 0, 1, self.max_lines)
 
    self:settext(text)
@@ -534,11 +564,19 @@ end
 function TextBox:draw()
    pge.gfx.drawrect(self.x, self.y, self.w, self.h, colors[theme().backcolor])
 
-   font:activate()
    local y = self.y + 1
-   for i, line in subset(self.lines, self.first_line, self.first_line + self.max_lines - 1) do
-      font:print(self.x + 1, y, colors[theme().forecolor], self.lines[i])
-      y = y + font:height() + 1
+   local af = font
+   for i, line in subset(self.lines, self.first_line, self.max_lines) do
+      local x = self.x + 1
+      for j, span in ipairs(line) do
+         if span.font ~= af then af = span.font ; af:activate() end
+         af:print(x, y, colors[theme().forecolor], span.text)
+         if span.uline then
+            pge.gfx.drawline(x, y + font:height(), x + span.width, y + font:height(), colors[theme().forecolor])
+         end
+         x = x + span.width
+      end
+      y = y + font:height() + self.leading
    end
 
    self.scroll:draw()
@@ -553,7 +591,8 @@ function ListBox:init(x, y, w, h, items)
    self.items = items or {}
    self.selected = 1
    self.first_line = 1
-   self.max_lines = floor((self.h - 2) / (font:height() + 1))
+   self.leading = 3
+   self.max_lines = floor((self.h - 2) / (font:height() + self.leading))
 
    self.scroll = ScrollBar(self.x + self.w - 8, self.y, 8, self.h, 1, 0, 1, self.max_lines)
 end
@@ -604,12 +643,16 @@ function ListBox:draw()
    font:activate()
 
    local y = self.y + 1
-   for i, item in subset(self.items, self.first_line, self.first_line + self.max_lines - 1) do
+   for i, item in subset(self.items, self.first_line, self.max_lines) do
       if i == self.selected then
-         pge.gfx.drawrect(self.x, y, self.w, font:height() + 1, colors[theme().highlight])
+         pge.gfx.drawrect(self.x, y, self.w, font:height() + self.leading, colors[theme().highlight])
       end
-      font:print(self.x + 1, y, colors[theme().forecolor], tostring(item))
-      y = y + font:height() + 1
+
+      item = tostring(item)
+      if self.numbered then item = '%d. %s' % { i, item } end
+
+      font:print(self.x + 1, y, colors[theme().forecolor], item)
+      y = y + font:height() + self.leading
    end
 
    self.scroll:draw()
@@ -641,19 +684,13 @@ StatusBar = class(Widget)
 
 function StatusBar:init(x, y, w, h, buttons)
    Widget.init(self, x, y, w, h)
+   self:setbuttons(buttons)
+end
+
+function StatusBar:setbuttons(buttons)
    self.buttons = buttons or {}
-end
-
-function StatusBar:update(delta)
-   Widget.update(self, delta)
-end
-
-function StatusBar:draw()
-   pge.gfx.drawrect(self.x, self.y, self.w, self.h, colors[theme().infoback])
 
    local btns = {}
-   if self.buttons.St then table.insert(btns, "Start: " .. self.buttons.St) end
-   if self.buttons.Se then table.insert(btns, "Select: " .. self.buttons.Se) end
    if self.buttons.X then table.insert(btns, "X: "  .. self.buttons.X) end
    if self.buttons.O then table.insert(btns, "O: "  .. self.buttons.O) end
    if self.buttons.S then table.insert(btns, "[]: " .. self.buttons.S) end
@@ -666,11 +703,24 @@ function StatusBar:draw()
       if self.buttons.R then table.insert(btns, "R: "  .. self.buttons.R) end
    end
 
-   font:activate()
-   font:print(self.x + 1, self.y, colors[theme().infofore], table.concat(btns, "   "))
+   if self.buttons.St then table.insert(btns, "Start: " .. self.buttons.St) end
+   if self.buttons.Se then table.insert(btns, "Select: " .. self.buttons.Se) end
 
-   local s = '%d KB free' % (pge.utils.freeram()/1024)
-   font:print(self.x + self.w - font:measure(s) - 2, self.y, colors[theme().infofore], s)
+   self.text = table.concat(btns, "   ")
+end
+
+function StatusBar:update(delta)
+   Widget.update(self, delta)
+end
+
+function StatusBar:draw()
+   pge.gfx.drawrect(self.x, self.y, self.w, self.h, colors[theme().infoback])
+
+   font:activate()
+   font:print(self.x + 1, self.y, colors[theme().infofore], self.text)
+
+   --local s = '%d KB free' % (pge.utils.freeram()/1024)
+   --font:print(self.x + self.w - font:measure(s) - 2, self.y, colors[theme().infofore], s)
 end
 
 --------------------------------------------------------------------------------
@@ -682,7 +732,6 @@ function View:init(title, buttons, ctrltype, ...)
    self.title = TitleBar(0, 0, 480, fontb:height() + 1, title)
    self.status = StatusBar(0, 271 - font:height(), 480, font:height() + 1, buttons)
    self.control = ctrltype(0, self.title.h, 480, self.status.y - self.title.h, ...)
-   self.running = true
 end
 
 function View:interact()
@@ -706,7 +755,18 @@ function View:draw()
 end
 
 function View:close()
-   self.running = false
+   self:on_close()
+   screen:pop_view()
+end
+
+function View:on_close() end
+
+--------------------------------------------------------------------------------
+
+ImportView = class(View)
+
+function ImportView:init()
+   View.init(self, "Importing FFNDATA.DAT...", {}, Widget)
 end
 
 --------------------------------------------------------------------------------
@@ -714,7 +774,7 @@ end
 MainMenuView = class(View)
 
 function MainMenuView:init()
-   View.init(self, "FanFiction.Net Browser", {O = "Select" }, ListBox)
+   View.init(self, "FanFiction.Net Browser", { O = "Select" }, ListBox)
 
    self.calls = {
       LibraryView,
@@ -723,6 +783,7 @@ function MainMenuView:init()
       --SearchView,
       FeedsView,
       OptionsView,
+      pge.exit,
       }
    table.insert(self.control.items, "Library")
    table.insert(self.control.items, "Categories")
@@ -730,6 +791,7 @@ function MainMenuView:init()
    --table.insert(self.control.items, "Search")
    table.insert(self.control.items, "Feeds")
    table.insert(self.control.items, "Options")
+   table.insert(self.control.items, "Exit")
 end
 
 function MainMenuView:interact()
@@ -745,7 +807,7 @@ end
 OptionsView = class(View)
 
 function OptionsView:init()
-   View.init(self, "Options", {X = "Return", O = "Select" }, ListBox)
+   View.init(self, "Options", { X = "Return", O = "Select" }, ListBox)
 
    self.calls = { ThemesView }
    table.insert(self.control.items, "Themes")
@@ -766,18 +828,17 @@ end
 ThemesView = class(View)
 
 function ThemesView:init()
-   View.init(self, "Themes", {X = "Return", O = "Edit", S = "New", T = "Remove" }, ListBox)
+   View.init(self, "Themes", { X = "Return", O = "Edit", S = "New", T = "Remove" }, ListBox)
 
-   self.themes = themes
+   for i, theme in ipairs(db.theme) do
+      self.control.items[i] = db.theme[i].name
+   end
 
+   self.control.numbered = true
    self.control.selected = gettheme()
 end
 
 function ThemesView:update(delta)
-   for i, t in ipairs(self.themes) do
-      self.control.items[i] = t.name
-   end
-
    View.update(self, delta)
 end
 
@@ -787,29 +848,38 @@ function ThemesView:interact()
    if pge.controls.pressed(PGE_CTRL_CIRCLE) then
       screen:push_view(CustomThemeView(self.control.selected))
    elseif pge.controls.pressed(PGE_CTRL_TRIANGLE) then
-      local rslt = screen:showDialog(Dialog.message(
-         'Remove theme "%s"?' % self.themes[self.control.selected].name,
-         PGE_UTILS_MSG_DIALOG_YESNO_BUTTONS +
-         PGE_UTILS_MSG_DIALOG_DEFAULT_BUTTON_NO))
-      if rslt == PGE_UTILS_MSG_DIALOG_RESULT_YES then
-         table.remove(self.themes, self.control.selected)
-         table.remove(self.control.items, self.control.selected)
-         if self.control.selected > #self.themes then
-            self.control.selected = #self.themes
-            settheme(self.control.selected)
+      if #db.theme > 1 then
+         local rslt = screen:showDialog(Dialog.message(
+            'Remove theme "%s"?' % db.theme[self.control.selected].name,
+            PGE_UTILS_MSG_DIALOG_YESNO_BUTTONS +
+            PGE_UTILS_MSG_DIALOG_DEFAULT_BUTTON_NO))
+         if rslt == PGE_UTILS_MSG_DIALOG_RESULT_YES then
+            table.remove(db.theme, self.control.selected)
+            table.remove(self.control.items, self.control.selected)
+            if self.control.selected > #db.theme then
+               self.control.selected = #db.theme
+               settheme(self.control.selected)
+            end
          end
       end
    elseif pge.controls.pressed(PGE_CTRL_SQUARE) then
       local t = table.copy(theme())
+      local n = #db.theme + 1
       t.name = "New Theme"
-      table.insert(self.themes, t)
-      self.control.selected = #self.themes
+      db.theme[n] = t
+      self.control.selected = n
       screen:push_view(CustomThemeView(self.control.selected))
    elseif pge.controls.pressed(PGE_CTRL_CROSS) then
       self:close()
+   --elseif pge.controls.pressed(PGE_CTRL_START) then
+   --   upload_themes()
    end
 
    settheme(self.control.selected)
+end
+
+function ThemesView:on_close()
+   db.theme:save()
 end
 
 --------------------------------------------------------------------------------
@@ -822,7 +892,7 @@ function CustomThemeView:init(index)
    self.backup = table.copy(theme())
 
    View.init(self, 'Edit Theme - "%s"' % self.backup.name,
-      {X = "Return", O = "Accept", LR = "Change" }, ListBox)
+      { X = "Return", O = "Accept", LR = "Change" }, ListBox)
 
    self.colors = { 'name', 'forecolor', 'backcolor', 'infofore', 'infoback', 'highlight' }
    table.insert(self.control.items, "Name: " .. theme().name)
@@ -875,40 +945,56 @@ end
 LibraryView = class(View)
 
 function LibraryView:init()
-   View.init(self, "Library", {X = "Return", O = "Read", T = "Remove" }, ListBox)
+   View.init(self, "Library", { X = "Return", O = "Read", T = "Remove" }, ListBox)
 
-   self.stories = library
+   for i, sid in ipairs(db.library) do
+      local story = db.story[sid]
+      self.control.items[i] = '"%s" by %s' % {
+         story.title, db.author[story.author].name
+         }
+   end
+
+   self.control.numbered = true
 end
 
+--[[
 function LibraryView:update(delta)
-   for i, sid in ipairs(self.stories) do
+   for i, sid in subset(
+      self.stories, self.control.first_line, self.control.max_lines)
+   do
       local story = db.story[sid]
-      self.control.items[i] = '%3d. "%s" by %s' % {
+      self.control.items[i] = '%d. "%s" by %s' % {
          i, story.title, db.author[story.author].name
          }
    end
 
    View.update(self, delta)
 end
-
+]]
 function LibraryView:interact()
    View.interact(self)
 
    if pge.controls.pressed(PGE_CTRL_CIRCLE) then
-      if self.stories[self.control.selected] then
-         local sid = self.stories[self.control.selected]
+      if db.library[self.control.selected] then
+         local sid = db.library[self.control.selected]
          screen:push_view(StoryView(sid))
-         self.control.selected = table.find(self.stories, sid)
+         table.remove(db.library, self.control.selected)
+         table.insert(db.library, 1, sid)
+         local item = table.remove(self.control.items, self.control.selected)
+         table.insert(self.control.items, 1, item)
+         self.control.selected = 1
+         db.library:save()
       end
    elseif pge.controls.pressed(PGE_CTRL_TRIANGLE) then
-      if self.stories[self.control.selected] then
+      if db.library[self.control.selected] then
          local rslt = screen:showDialog(Dialog.message(
             "Remove this story from your library?",
             PGE_UTILS_MSG_DIALOG_YESNO_BUTTONS +
             PGE_UTILS_MSG_DIALOG_DEFAULT_BUTTON_NO))
          if rslt == PGE_UTILS_MSG_DIALOG_RESULT_YES then
-            table.remove(self.stories, self.control.selected)
             table.remove(self.control.items, self.control.selected)
+            table.remove(db.library, self.control.selected)
+            db.library:save()
          end
       end
    elseif pge.controls.pressed(PGE_CTRL_CROSS) then
@@ -932,17 +1018,15 @@ table.sort(categories, sort_categories)
 CategoriesView = class(View)
 
 function CategoriesView:init()
-   View.init(self, "Categories", {X = "Return", O = "Select", L = "Prev Letter", R = "Next Letter" }, ListBox)
+   View.init(self, "Categories",
+      { X = "Return", O = "Select", L = "Prev Letter", R = "Next Letter" },
+      ListBox)
 
-   self.categories = categories
-
-   for i, c in ipairs(self.categories) do
+   for i, c in ipairs(categories) do
       self.control.items[i] = FFN.subcategory[c]
    end
-end
 
-function CategoriesView:update(delta)
-   View.update(self, delta)
+   self.control.numbered = true
 end
 
 function CategoriesView:interact()
@@ -950,22 +1034,22 @@ function CategoriesView:interact()
 
    if pge.controls.pressed(PGE_CTRL_CIRCLE) then
       screen:push_view(FeedView(
-         Feed(FFN.list(self.categories[self.control.selected]))
+         Feed(FFN.list(categories[self.control.selected]))
          ))
    elseif pge.controls.pressed(PGE_CTRL_LTRIGGER) then
       local t = self.control.selected
       repeat
          self.control.selected = wrap(self.control.selected - 1, 1, #self.control.items)
       until self.control.selected == t or
-         FFN.subcategory[self.categories[self.control.selected]]:sub(1,1):lower() ~=
-         FFN.subcategory[self.categories[t]]:sub(1,1):lower()
+         FFN.subcategory[categories[self.control.selected]]:sub(1,1):lower() ~=
+         FFN.subcategory[categories[t]]:sub(1,1):lower()
    elseif pge.controls.pressed(PGE_CTRL_RTRIGGER) then
       local t = self.control.selected
       repeat
          self.control.selected = wrap(self.control.selected + 1, 1, #self.control.items)
       until self.control.selected == t or
-         FFN.subcategory[self.categories[self.control.selected]]:sub(1,1):lower() ~=
-         FFN.subcategory[self.categories[t]]:sub(1,1):lower()
+         FFN.subcategory[categories[self.control.selected]]:sub(1,1):lower() ~=
+         FFN.subcategory[categories[t]]:sub(1,1):lower()
    elseif pge.controls.pressed(PGE_CTRL_CROSS) then
       self:close()
    end
@@ -976,7 +1060,7 @@ end
 FindAuthorView = class(View)
 
 function FindAuthorView:init()
-   View.init(self, "Find Author", {X = "Return" }, ListBox)
+   View.init(self, "Find Author", { X = "Return" }, ListBox)
 
    table.insert(self.control.items, "This feature is not yet supported.")
 end
@@ -1000,7 +1084,7 @@ end
 SearchView = class(View)
 
 function SearchView:init()
-   View.init(self, "Search", {X = "Return" }, ListBox)
+   View.init(self, "Search", { X = "Return" }, ListBox)
 
    self.search = { type = "story", plus_keywords = "", minus_keywords = "", match = "any", categoryid = 0, }
    self.include = ""
@@ -1025,26 +1109,30 @@ end
 
 --------------------------------------------------------------------------------
 
+function sort_feeds(f1, f2)
+   if dirname(f1):lower() < dirname(f2):lower() then
+      return true
+   end
+   return (db.feed[f1].title or "") < (db.feed[f2].title or "")
+end
+
 FeedsView = class(View)
 
 function FeedsView:init(feed)
-   View.init(self, "Feeds", {X = "Return", O = "View feed"}, ListBox)
+   View.init(self, "Feeds", { X = "Return", O = "View feed" }, ListBox)
 
    self.feeds = {}
-   for file, feed in pairs(db:group('feed')) do
+   for file, feed in pairs(db.feed) do
       table.insert(self.feeds, file)
    end
+   --table.sort(self.feeds, sort_feeds)
    table.sort(self.feeds)
-end
 
-function FeedsView:update(delta)
    for i, file in ipairs(self.feeds) do
-      self.control.items[i] = '%3d. %s' % {
-         i, db.feed[file].title:gsub('^FanFiction%.Net %- ', '')
-         }
+      self.control.items[i] = db.feed[file].title or file
    end
 
-   View.update(self, delta)
+   self.control.numbered = true
 end
 
 function FeedsView:interact()
@@ -1066,26 +1154,37 @@ FeedView = class(View)
 
 function FeedView:init(feed)
    self.feed = feed
-   View.init(self, self.feed.title and self.feed.title['$'] or "Feed not available",
-      {X = "Return", O = "Read", T = "Details", S = "Update feed"}, ListBox)
+   View.init(self, self.feed.title and self.feed.title or "Feed not available",
+      { X = "Return", O = "Read", T = "Details", S = "Update feed" }, ListBox)
 
    self.stories = {}
-   for i, entry in ipairs(self.feed.entry) do
-      self.stories[i] = FFN.storyid(entry.link['@href'])
+   if self.feed.entry then
+      for i, entry in ipairs(self.feed.entry) do
+         local sid = FFN.storyid(entry.link.alternate)
+         local story = db.story[sid]
+         self.stories[i] = sid
+         self.control.items[i] = '"%s" by %s' % {
+            story.title, db.author[story.author].name
+            }
+      end
    end
-end
 
+   self.control.numbered = true
+end
+--[[
 function FeedView:update(delta)
-   for i, sid in ipairs(self.stories) do
+   for i, sid in subset(
+      self.stories, self.control.first_line, self.control.max_lines)
+   do
       local story = db.story[sid]
-      self.control.items[i] = '%3d. "%s" by %s' % {
+      self.control.items[i] = '%d. "%s" by %s' % {
          i, story.title, db.author[story.author].name
          }
    end
 
    View.update(self, delta)
 end
-
+]]
 function FeedView:interact()
    View.interact(self)
 
@@ -1100,7 +1199,7 @@ function FeedView:interact()
    elseif pge.controls.pressed(PGE_CTRL_SQUARE) then
       self.feed:load(true)
       for i, entry in ipairs(self.feed.entry) do
-         self.stories[i] = FFN.storyid(entry.link['@href'])
+         self.stories[i] = FFN.storyid(entry.link.alternate)
       end
    elseif pge.controls.pressed(PGE_CTRL_CROSS) then
       self:close()
@@ -1114,9 +1213,23 @@ EntryView = class(View)
 function EntryView:init(entry)
    self.entry = entry
    View.init(self,
-      '"%s" by %s' % {self.entry.title['$'], self.entry.author.name['$']},
-      {X = "Return", O = "Download", T = "More by this author"},
-      TextBox, unhtmlize(entry.summary['$']))
+      '"%s" by %s' % {self.entry.title, self.entry.author.name},
+      { X = "Return", O = "Download", T = "More by this author" },
+      TextBox, convert_html(entry.summary, format_tags))
+
+   self.sid = FFN.storyid(entry.link.alternate)
+
+   local userid = FFN.userid(entry.author.uri)
+   local nchapters = FFN.nchapters(entry.summary)
+
+   db.author[userid] = {
+      name = entry.author.name,
+      }
+   db.story[self.sid] = {
+      title = entry.title,
+      author = userid,
+      nchapters = nchapters,
+      }
 end
 
 function EntryView:interact()
@@ -1129,7 +1242,7 @@ function EntryView:interact()
          screen:showDialog(Dialog.message('Downloaded %d new chapter(s).' % view.count))
       end
    elseif pge.controls.pressed(PGE_CTRL_TRIANGLE) then
-      local userid = FFN.userid(self.entry.author.uri['$'])
+      local userid = FFN.userid(self.entry.author.uri)
       screen:push_view(FeedView(Feed(FFN.author(userid))))
    elseif pge.controls.pressed(PGE_CTRL_CROSS) then
       self:close()
@@ -1142,12 +1255,10 @@ StoryView = class(View)
 
 function StoryView:init(sid)
    self.sid = sid
-   self.story = db.story[sid]
-   self.bookmark = db.bookmark[self.sid]
+   self.story = db.story[self.sid]
+   self.bookmark = db.bookmark:get(self.sid, {})
 
-   shelve_story(self.sid)
-
-   View.init(self, self.story.title, {X = "Return", L = "Prev Chapter", R = "Next Chapter"}, TextBox)
+   View.init(self, self.story.title, { X = "Return", L = "Prev Chapter", R = "Next Chapter" }, TextBox)
 
    self:loadchapter()
 end
@@ -1158,7 +1269,7 @@ function StoryView:loadchapter(chapter)
 
    offline = false
    local str = getchapter(FFN.chapter(self.sid, self.bookmark.chapter)) or 'Chapter not available.'
-   self.control:settext(unhtmlize(str))
+   self.control:settext(convert_html(str, format_tags))
    self.control.first_line = self.bookmark[self.bookmark.chapter] or 1
 end
 
@@ -1177,7 +1288,15 @@ function StoryView:interact()
       self:close()
    end
 
-   self.bookmark[self.bookmark.chapter] = self.control.first_line
+   if self.control.first_line > 1 then
+      self.bookmark[self.bookmark.chapter] = self.control.first_line
+   else
+      self.bookmark[self.bookmark.chapter] = nil
+   end
+end
+
+function StoryView:on_close()
+   db.bookmark:save()
 end
 
 --------------------------------------------------------------------------------
@@ -1185,12 +1304,12 @@ end
 DownloadView = class(View)
 
 function DownloadView:init(entry)
-   self.sid = FFN.storyid(entry.link['@href'])
+   self.sid = FFN.storyid(entry.link.alternate)
    self.story = db.story[self.sid]
 
    shelve_story(self.sid)
 
-   View.init(self, 'Downloading "%s"...' % self.story.title, {X = 'Cancel'},
+   View.init(self, 'Downloading "%s"...' % self.story.title, { X = 'Cancel' },
       ProgressBar, 0, self.story.nchapters)
 
    self.count = 0
@@ -1227,8 +1346,10 @@ end
 --------------------------------------------------------------------------------
 
 function shelve_story(sid)
-   table.remove(library, table.find(library, sid))
-   table.insert(library, 1, sid)
+   if table.find(db.library, sid) < 1 then
+      table.insert(db.library, sid)
+      db.library:save()
+   end
 end
 
 --------------------------------------------------------------------------------
@@ -1252,22 +1373,58 @@ colors = {
    [15] = pge.gfx.createcolor(255, 255, 255),
 }
 
-font   = pge.font.load('font/vera.ttf',   14)
-fontb  = pge.font.load('font/verabd.ttf', 14)
---fonti  = pge.font.load('font/verait.ttf', 12)
---fontbi = pge.font.load('font/verabi.ttf', 12)
+font   = pge.font.load('font/vera.ttf',   14, PGE_VRAM)
+fontb  = pge.font.load('font/verabd.ttf', 14, PGE_VRAM)
+fonti  = pge.font.load('font/verait.ttf', 14)
+fontbi = pge.font.load('font/verabi.ttf', 14)
 
-db = Database('ffndata.dat')
+function settheme(n)
+   db.theme.__current = clamp(n, 1, #db.theme)
+end
+function gettheme()
+   return db.theme.__current or 1
+end
+function theme()
+   return __temptheme or db.theme[gettheme()]
+end
 
-themes = db:group('themes')
-library = db:group('library')
+--[[
+THEME_UPLOAD_URL = 'http://fanfiction.ath.cx/ffn-browser/theme.php'
 
-function settheme(n) themes.__current = clamp(n, 1, #themes) end
-function gettheme() return themes.__current or 1 end
-function theme() return themes[gettheme()] end
+function urlencode(str)
+   return str:gsub('%W', function(c) return '%%%02X' % c:byte() end)
+end
 
-if not next(themes) then
-   table.insert(themes, {
+function upload_themes()
+   offline = false
+   if ap_connect() then
+      db.theme:save()
+
+      local ok, result = pge.net.postform(
+         THEME_UPLOAD_URL,
+         'id=' .. urlencode(pge.utils.psid()) ..
+         '&name=' .. urlencode(pge.utils.nickname()) ..
+         '&themes=' .. urlencode(dump(db.theme))
+         )
+
+      if ok then
+         local themes = assert(loadstring(result))()
+
+         if type(themes) == 'table' and #themes > 0 then
+            screen:showDialog(Dialog.message(
+               "Uploaded themes:\n   " .. table.concat(themes, '\n   ')
+               ))
+         else
+            local err = type(themes) == 'string' and themes or 'unknown error'
+            screen:showDialog(Dialog.message("Upload error: " .. err))
+         end
+      end
+   end
+end
+]]
+
+function set_default_themes()
+   table.insert(db.theme, {
       name="Default",
       forecolor=0,
       backcolor=15,
@@ -1275,7 +1432,7 @@ if not next(themes) then
       infoback=1,
       highlight=7,
    })
-   table.insert(themes, {
+   table.insert(db.theme, {
       name="Monochrome Light",
       forecolor=0,
       backcolor=15,
@@ -1283,7 +1440,7 @@ if not next(themes) then
       infoback=0,
       highlight=7,
    })
-   table.insert(themes, {
+   table.insert(db.theme, {
       name="Monochrome Dark",
       forecolor=15,
       backcolor=8,
@@ -1291,7 +1448,7 @@ if not next(themes) then
       infoback=0,
       highlight=0,
    })
-   table.insert(themes, {
+   table.insert(db.theme, {
       name="Mint & Lime",
       forecolor=0,
       backcolor=2,
@@ -1299,7 +1456,7 @@ if not next(themes) then
       infoback=10,
       highlight=10,
    })
-   table.insert(themes, {
+   table.insert(db.theme, {
       name="Silky Doll",
       forecolor=0,
       backcolor=12,
@@ -1307,7 +1464,7 @@ if not next(themes) then
       infoback=4,
       highlight=4,
    })
-   table.insert(themes, {
+   table.insert(db.theme, {
       name="Darkness Beyond Twilight",
       forecolor=7,
       backcolor=0,
@@ -1315,15 +1472,85 @@ if not next(themes) then
       infoback=4,
       highlight=4,
    })
+   table.insert(db.theme, {
+      name="Hyrulean Hero",
+      forecolor=0,
+      backcolor=2,
+      infofore=14,
+      infoback=6,
+      highlight=14,
+   })
+   table.insert(db.theme, {
+      name="Red, White & Bluejeans",
+      forecolor=15,
+      backcolor=8,
+      infofore=15,
+      infoback=1,
+      highlight=4,
+   })
 
    settheme(1)
 end
 
+db = {
+   theme    = Database('config/theme.lua'),
+   library  = Database('config/library.lua'),
+   bookmark = Database('config/bookmark.lua'),
+   story    = Database('config/story.lua'),
+   author   = Database('config/author.lua'),
+   feed     = Database('config/feed.lua'),
+   }
+
+if #db.theme == 0 then
+   set_default_themes()
+end
+
 screen = Screen()
+
+-- Try to import old data
+if pge.file.exists('FFNDATA.DAT') then
+   screen:push_view(ImportView())
+   screen:doFrame()
+
+   local ffndata = loadfile('FFNDATA.DAT')
+
+   if ffndata then
+      ffndata = ffndata()
+
+      if ffndata then
+         for k, v in pairs(db) do
+            local g = db[k]
+            if k == 'theme' then k = 'themes' end
+            for kk, vv in pairs(ffndata[k] or {}) do
+               g[kk] = vv
+            end
+
+            g:save()
+         end
+
+         local rslt = screen:showDialog(Dialog.message(
+            'Import complete. Delete FFNDATA.DAT?',
+            PGE_UTILS_MSG_DIALOG_YESNO_BUTTONS +
+            PGE_UTILS_MSG_DIALOG_DEFAULT_BUTTON_NO))
+
+         if rslt == PGE_UTILS_MSG_DIALOG_RESULT_YES then
+            pge.file.remove('FFNDATA.DAT')
+         else
+            pge.file.rename('FFNDATA.DAT', 'FFNDATA.OLD')
+         end
+      else
+         screen:showDialog(Dialog.message('Import error:\nNo data found in FFNDATA.DAT.'))
+      end
+   else
+      screen:showDialog(Dialog.message('Import error:\nCould not open FFNDATA.DAT.'))
+   end
+end
+
 screen:push_view(MainMenuView())
 screen:run()
 
 ap_disconnect()
 
-db:save()
-
+db.story:save()
+db.author:save()
+db.feed:save()
