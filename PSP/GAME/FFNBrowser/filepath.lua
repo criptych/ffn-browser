@@ -1,5 +1,3 @@
-<<<<<<< .working
-
 function mkdirs(path)
    local p = ''
    for dir in path:gmatch('/?[^/]+/') do
@@ -38,13 +36,3 @@ function writefile(filename, content)
       return true
    end
 end
-=======
-<html><head><title>Revision 7: /trunk</title></head>
-<body>
- <h2>Revision 7: /trunk</h2>
- <ul>
-  <li><a href="../">..</a></li>
-  <li><a href="PSP/">PSP/</a></li>
- </ul>
- <hr noshade><em><a href="http://code.google.com/">Google Code</a> powered by <a href="http://subversion.tigris.org/">Subversion</a> </em>
-</body></html>>>>>>>> .merge-right.r7
